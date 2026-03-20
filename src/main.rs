@@ -1,4 +1,4 @@
-﻿use std::collections::BTreeMap;
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{BufReader, Write};
@@ -11,7 +11,11 @@ use walkdir::WalkDir;
 const OTHERS_DIR: &str = "\u{305d}\u{306e}\u{4ed6}";
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "Sort photos by EXIF date (YYYYMMDD) into another directory")]
+#[command(
+    author,
+    version,
+    about = "Sort photos by EXIF date (YYYYMMDD) into another directory"
+)]
 struct Args {
     /// Source directory to scan recursively.
     #[arg(short, long)]
@@ -58,8 +62,12 @@ fn run(args: Args) -> Result<(), String> {
         return Ok(());
     }
 
-    fs::create_dir_all(&destination)
-        .map_err(|e| format!("Failed to create destination {}: {e}", destination.display()))?;
+    fs::create_dir_all(&destination).map_err(|e| {
+        format!(
+            "Failed to create destination {}: {e}",
+            destination.display()
+        )
+    })?;
 
     let mut moved_count = 0usize;
     for (bucket, files) in plan {
@@ -82,12 +90,13 @@ fn run(args: Args) -> Result<(), String> {
 }
 
 fn canonicalize_existing_dir(path: &Path, label: &str) -> Result<PathBuf, String> {
-    let metadata =
-        fs::metadata(path).map_err(|e| format!("{label} does not exist: {} ({e})", path.display()))?;
+    let metadata = fs::metadata(path)
+        .map_err(|e| format!("{label} does not exist: {} ({e})", path.display()))?;
     if !metadata.is_dir() {
         return Err(format!("{label} must be a directory: {}", path.display()));
     }
-    fs::canonicalize(path).map_err(|e| format!("Failed to canonicalize {label}: {} ({e})", path.display()))
+    fs::canonicalize(path)
+        .map_err(|e| format!("Failed to canonicalize {label}: {} ({e})", path.display()))
 }
 
 fn ensure_destination_path(path: &Path) -> Result<PathBuf, String> {
@@ -95,20 +104,34 @@ fn ensure_destination_path(path: &Path) -> Result<PathBuf, String> {
         let metadata = fs::metadata(path)
             .map_err(|e| format!("Cannot access destination {} ({e})", path.display()))?;
         if !metadata.is_dir() {
-            return Err(format!("destination must be a directory: {}", path.display()));
+            return Err(format!(
+                "destination must be a directory: {}",
+                path.display()
+            ));
         }
-        return fs::canonicalize(path)
-            .map_err(|e| format!("Failed to canonicalize destination {} ({e})", path.display()));
+        return fs::canonicalize(path).map_err(|e| {
+            format!(
+                "Failed to canonicalize destination {} ({e})",
+                path.display()
+            )
+        });
     }
 
     let base = if let Some(parent) = path.parent() {
         if parent.as_os_str().is_empty() {
             std::env::current_dir().map_err(|e| format!("Failed to get current directory: {e}"))?
         } else if parent.exists() {
-            fs::canonicalize(parent)
-                .map_err(|e| format!("Failed to canonicalize destination parent {} ({e})", parent.display()))?
+            fs::canonicalize(parent).map_err(|e| {
+                format!(
+                    "Failed to canonicalize destination parent {} ({e})",
+                    parent.display()
+                )
+            })?
         } else {
-            return Err(format!("Destination parent does not exist: {}", parent.display()));
+            return Err(format!(
+                "Destination parent does not exist: {}",
+                parent.display()
+            ));
         }
     } else {
         std::env::current_dir().map_err(|e| format!("Failed to get current directory: {e}"))?
@@ -206,14 +229,22 @@ fn write_dry_run_report(
     let total_groups = plan.len();
     for (group_idx, (bucket, files)) in plan.iter().enumerate() {
         let is_last_group = group_idx + 1 == total_groups;
-        let group_prefix = if is_last_group { "└──" } else { "├──" };
+        let group_prefix = if is_last_group {
+            "└──"
+        } else {
+            "├──"
+        };
         output.push_str(&format!("{} {}/\n", group_prefix, bucket));
 
         let total_files = files.len();
         for (file_idx, file_path) in files.iter().enumerate() {
             let is_last_file = file_idx + 1 == total_files;
             let branch = if is_last_group { "    " } else { "│   " };
-            let file_prefix = if is_last_file { "└──" } else { "├──" };
+            let file_prefix = if is_last_file {
+                "└──"
+            } else {
+                "├──"
+            };
             let name = file_path
                 .file_name()
                 .and_then(OsStr::to_str)
@@ -222,10 +253,18 @@ fn write_dry_run_report(
         }
     }
 
-    let mut file = File::create(report_file)
-        .map_err(|e| format!("Failed to create report file {} ({e})", report_file.display()))?;
-    file.write_all(output.as_bytes())
-        .map_err(|e| format!("Failed to write report file {} ({e})", report_file.display()))?;
+    let mut file = File::create(report_file).map_err(|e| {
+        format!(
+            "Failed to create report file {} ({e})",
+            report_file.display()
+        )
+    })?;
+    file.write_all(output.as_bytes()).map_err(|e| {
+        format!(
+            "Failed to write report file {} ({e})",
+            report_file.display()
+        )
+    })?;
 
     Ok(())
 }
@@ -237,7 +276,10 @@ fn unique_destination_path(dir: &Path, file_name: &OsStr) -> PathBuf {
         .and_then(OsStr::to_str)
         .unwrap_or("file")
         .to_string();
-    let ext = original.extension().and_then(OsStr::to_str).map(str::to_string);
+    let ext = original
+        .extension()
+        .and_then(OsStr::to_str)
+        .map(str::to_string);
 
     let mut candidate = dir.join(file_name);
     let mut idx = 1usize;
@@ -257,8 +299,9 @@ fn move_file(src: &Path, dst: &Path) -> Result<(), String> {
     match fs::rename(src, dst) {
         Ok(_) => Ok(()),
         Err(_) => {
-            fs::copy(src, dst)
-                .map_err(|e| format!("Copy failed: {} -> {} ({e})", src.display(), dst.display()))?;
+            fs::copy(src, dst).map_err(|e| {
+                format!("Copy failed: {} -> {} ({e})", src.display(), dst.display())
+            })?;
             fs::remove_file(src)
                 .map_err(|e| format!("Failed to remove source file {} ({e})", src.display()))
         }
