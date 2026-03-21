@@ -1,0 +1,158 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      package_name: ${{ steps.meta.outputs.package_name }}
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      tag_exists: ${{ steps.tag_check.outputs.tag_exists }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Read package metadata from Cargo.toml
+        id: meta
+        shell: bash
+        run: |
+          PACKAGE_NAME="$(grep -m1 '^name\s*=' Cargo.toml | sed -E 's/name\s*=\s*"([^"]+)"/\1/')"
+          VERSION="$(grep -m1 '^version\s*=' Cargo.toml | sed -E 's/version\s*=\s*"([^"]+)"/\1/')"
+
+          if [[ -z "$PACKAGE_NAME" || -z "$VERSION" ]]; then
+            echo "Failed to read package name/version from Cargo.toml"
+            exit 1
+          fi
+
+          TAG="$VERSION"
+          echo "package_name=$PACKAGE_NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Resolved package=$PACKAGE_NAME version=$VERSION tag=$TAG"
+
+      - name: Check if tag already exists
+        id: tag_check
+        shell: bash
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          git fetch --tags --force
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || \
+             git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
+            echo "Tag already exists: $TAG"
+          else
+            echo "tag_exists=false" >> "$GITHUB_OUTPUT"
+            echo "Tag does not exist yet: $TAG"
+          fi
+
+      - name: Create and push git tag
+        if: steps.tag_check.outputs.tag_exists == 'false'
+        shell: bash
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "refs/tags/$TAG"
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.tag_exists == 'false'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset_suffix: windows-x86_64
+          - os: macos-latest
+            asset_suffix: macos
+
+    steps:
+      - name: Checkout tagged commit
+        uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ needs.prepare.outputs.tag }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Package binary
+        shell: pwsh
+        env:
+          PACKAGE_NAME: ${{ needs.prepare.outputs.package_name }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          ASSET_SUFFIX: ${{ matrix.asset_suffix }}
+        run: |
+          $binary = $env:PACKAGE_NAME
+          if ($env:RUNNER_OS -eq "Windows") {
+            $binary = "$binary.exe"
+          }
+
+          $dist = "dist"
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          Copy-Item "target/release/$binary" "$dist/$binary" -Force
+
+          $asset = "$env:PACKAGE_NAME-$env:VERSION-$env:ASSET_SUFFIX.zip"
+          Compress-Archive -Path "$dist/$binary" -DestinationPath "$dist/$asset" -Force
+          "ASSET_PATH=$dist/$asset" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Upload packaged artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.asset_suffix }}
+          path: ${{ env.ASSET_PATH }}
+          if-no-files-found: error
+
+  release:
+    needs: [prepare, build]
+    if: needs.prepare.outputs.tag_exists == 'false'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Create GitHub Release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: ${{ needs.prepare.outputs.tag }}
+          files: release-assets/*
+          generate_release_notes: true
+
+  release-already-exists:
+    needs: prepare
+    if: needs.prepare.outputs.tag_exists == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip notice
+        run: echo "Release tag ${{ needs.prepare.outputs.tag }} already exists. Skipping release workflow."
